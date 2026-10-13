@@ -56,11 +56,11 @@ func jsonResult(v any) (Result, error) {
 
 func sessManager(tc *ToolContext) (*Manager, *Result) {
 	if InteractiveShellDisabled() {
-		r := Errorf("交互式 shell 已被全局停用(AGENT_CORE_DISABLE_INTERACTIVE_SHELL)")
+		r := Errorf("Interactive shell globally disabled (AGENT_CORE_DISABLE_INTERACTIVE_SHELL)")
 		return nil, &r
 	}
 	if tc == nil || tc.Tasks == nil {
-		r := Errorf("交互式 shell 需要后台任务管理器(未启用)")
+		r := Errorf("Interactive shell requires the background task manager (not enabled)")
 		return nil, &r
 	}
 	return tc.Tasks, nil
@@ -73,18 +73,18 @@ func ms(v int, def int) time.Duration {
 	return time.Duration(v) * time.Millisecond
 }
 
-// NewShellOpen 开一个交互会话。
+// NewShellOpen opens an interactive session.
 func NewShellOpen() CoreTool {
-	desc := "开一个持久 PTY 交互会话运行【交互式/需真 TTY 的程序】(msfconsole/ssh 交互/mysql、python 等 REPL/密码提示/nc 会话)，返回 session_id。**一次性、非交互命令用 Bash**。mode: interactive=阻塞到首个提示符/静默再返回启动输出; hands-free(默认)=立即返回, 之后用 shell_read 轮询; dispatch=立即返回, 完成时发通知; monitor=立即返回, 后台盯 watch 关键词命中即发通知(会话不结束, 仅本次运行内存活)。可设 prompt_regex(如 'msf6? >\\s*$')精确判定完成。用完务必 shell_close。"
+	desc := "Open a persistent PTY session for interactive programs requiring a real TTY (such as msfconsole, interactive ssh/mysql, Python REPLs, password prompts, and nc sessions). Returns session_id. **Use Bash for one-off, non-interactive commands.** mode: interactive=wait for the first prompt or quiet period, then return startup output; hands-free (default)=return immediately, then poll with shell_read; dispatch=return immediately and notify on completion; monitor=return immediately and notify when output matches a watch pattern (the session stays open; monitoring lasts only for this run). Set prompt_regex (for example, 'msf6? >\\s*$') to detect completion precisely. Call shell_close when finished."
 	schema := obj(map[string]any{
-		"command":          strProp("要运行的交互程序，如 'msfconsole -q' / 'ssh user@host' / 'python3'"),
-		"mode":             strProp("interactive | hands-free(默认) | dispatch | monitor"),
-		"watch":            arrStr("monitor 模式必填：要盯的关键词/正则数组，输出里命中任一即发通知(每个只报一次)"),
-		"prompt_regex":     strProp("可选：命令完成判定的提示符正则(匹配输出末尾)"),
-		"rows":             intProp("可选：PTY 行数(默认 24)"),
-		"cols":             intProp("可选：PTY 列数(默认 80)"),
-		"quiet_ms":         intProp("可选：静默多少毫秒算完成(默认 8000)"),
-		"startup_grace_ms": intProp("可选：启动宽限毫秒，此期间不触发静默判定(默认 15000)"),
+		"command":          strProp("Interactive program to run, such as 'msfconsole -q', 'ssh user@host', or 'python3'"),
+		"mode":             strProp("interactive | hands-free (default) | dispatch | monitor"),
+		"watch":            arrStr("Required in monitor mode: keyword or regex patterns; notify once for each pattern matched in output"),
+		"prompt_regex":     strProp("Optional prompt regex for command completion (matches the end of output)"),
+		"rows":             intProp("Optional PTY row count (default 24)"),
+		"cols":             intProp("Optional PTY column count (default 80)"),
+		"quiet_ms":         intProp("Optional quiet period in milliseconds before completion (default 8000)"),
+		"startup_grace_ms": intProp("Optional startup grace period in milliseconds before quiet detection (default 15000)"),
 	}, "command")
 	return sessTool("shell_open", desc, schema, false, func(ctx context.Context, in json.RawMessage, tc *ToolContext) (Result, error) {
 		m, errR := sessManager(tc)
@@ -103,7 +103,7 @@ func NewShellOpen() CoreTool {
 		}
 		_ = json.Unmarshal(in, &a)
 		if a.Command == "" {
-			return Errorf("command 必填"), nil
+			return Errorf("command is required"), nil
 		}
 		mode := a.Mode
 		if mode == "" {
@@ -112,17 +112,17 @@ func NewShellOpen() CoreTool {
 		switch mode {
 		case "hands-free", "interactive", "dispatch", "monitor":
 		default:
-			return Errorf("mode 需为 interactive | hands-free | dispatch | monitor"), nil
+			return Errorf("mode must be interactive | hands-free | dispatch | monitor"), nil
 		}
 		var watch []*regexp.Regexp
 		if mode == "monitor" {
 			if len(a.Watch) == 0 {
-				return Errorf("monitor 模式必须给 watch(要盯的关键词/正则)"), nil
+				return Errorf("monitor mode requires watch (keywords/regular expressions)"), nil
 			}
 			for _, w := range a.Watch {
 				re, err := regexp.Compile(w)
 				if err != nil {
-					return Errorf("watch 正则无效 " + w + ": " + err.Error()), nil
+					return Errorf("Invalid watch regular expression " + w + ": " + err.Error()), nil
 				}
 				watch = append(watch, re)
 			}
@@ -131,7 +131,7 @@ func NewShellOpen() CoreTool {
 		if a.PromptRegex != "" {
 			re, err := regexp.Compile(a.PromptRegex)
 			if err != nil {
-				return Errorf("prompt_regex 无效: " + err.Error()), nil
+				return Errorf("Invalid prompt_regex: " + err.Error()), nil
 			}
 			pr = re
 		}
@@ -142,7 +142,7 @@ func NewShellOpen() CoreTool {
 		}
 		s, err := m.openSession(a.Command, workDir, env, a.Rows, a.Cols, mode, pr)
 		if err != nil {
-			return Errorf("开启会话失败: " + err.Error()), nil
+			return Errorf("Failed to open session: " + err.Error()), nil
 		}
 		quiet, grace := ms(a.QuietMs, sessDefQuietMs), ms(a.StartupGraceMs, sessDefGraceMs)
 		switch mode {
@@ -162,20 +162,20 @@ func NewShellOpen() CoreTool {
 	})
 }
 
-// NewShellSend 向会话发送输入/按键。
+// NewShellSend sends input or key presses to a session.
 func NewShellSend() CoreTool {
-	desc := "向一个交互会话发送输入：text/submit/keys/hex/paste 可组合，按出现顺序发送(各参数含义见字段)。wait=true(默认)等命令完成并带回增量输出。"
+	desc := "Send input to an interactive session. Combine text/submit/keys/hex/paste; inputs are sent in their listed order. wait=true (default) waits for completion and returns incremental output."
 	schema := obj(map[string]any{
-		"session_id":   strProp("会话 id(shell_open 返回)"),
-		"text":         strProp("要输入的文本(不自动回车)"),
-		"submit":       boolProp("是否在文本后追加回车执行"),
-		"keys":         arrStr("具名键: ctrl+c/ctrl+d/tab/enter/esc/up/down/left/right/..."),
-		"hex":          arrStr("原始字节的十六进制, 如 ['0x1b','0x5b','0x41']"),
-		"paste":        strProp("多行粘贴(bracketed paste, 不触发逐行执行)"),
-		"wait":         boolProp("是否同步等到命令完成(默认 true)"),
-		"prompt_regex": strProp("可选：覆盖会话默认的完成判定提示符"),
-		"quiet_ms":     intProp("可选：静默判定阈值毫秒(默认 8000)"),
-		"timeout_ms":   intProp("可选：wait 的硬超时毫秒(默认 120000)"),
+		"session_id":   strProp("Session ID returned by shell_open"),
+		"text":         strProp("Text to send (no automatic Enter)"),
+		"submit":       boolProp("Append Enter after text"),
+		"keys":         arrStr("Named keys: ctrl+c/ctrl+d/tab/enter/esc/up/down/left/right/..."),
+		"hex":          arrStr("Raw bytes in hex, e.g. ['0x1b','0x5b','0x41']"),
+		"paste":        strProp("Multiline bracketed paste (without executing each line)"),
+		"wait":         boolProp("Wait for completion (default true)"),
+		"prompt_regex": strProp("Optional: override session completion prompt"),
+		"quiet_ms":     intProp("Optional: quiet threshold in milliseconds (default 8000)"),
+		"timeout_ms":   intProp("Optional: hard wait timeout in milliseconds (default 120000)"),
 	}, "session_id")
 	return sessTool("shell_send", desc, schema, false, func(ctx context.Context, in json.RawMessage, tc *ToolContext) (Result, error) {
 		m, errR := sessManager(tc)
@@ -197,10 +197,10 @@ func NewShellSend() CoreTool {
 		_ = json.Unmarshal(in, &a)
 		s, ok := m.session(a.SessionID)
 		if !ok {
-			return Errorf("会话不存在: " + a.SessionID), nil
+			return Errorf("Session not found: " + a.SessionID), nil
 		}
 		if !s.running() {
-			return Errorf("会话已结束(exit " + fmtExit(s.exit()) + ")，用 shell_read 读取尾部输出或 shell_close"), nil
+			return Errorf("Session ended (exit " + fmtExit(s.exit()) + "); use shell_read for trailing output or shell_close"), nil
 		}
 		before := s.total
 		// build & write input in order: text, submit(\r), keys, hex, paste
@@ -215,7 +215,7 @@ func NewShellSend() CoreTool {
 			if b, ok := keyToBytes(k); ok {
 				payload = append(payload, b...)
 			} else {
-				return Errorf("未知按键: " + k), nil
+				return Errorf("Unknown key: " + k), nil
 			}
 		}
 		if len(a.Hex) > 0 {
@@ -227,10 +227,10 @@ func NewShellSend() CoreTool {
 			payload = append(payload, "\x1b[201~"...)
 		}
 		if len(payload) == 0 {
-			return Errorf("没有可发送的输入(text/submit/keys/hex/paste 至少给一个)"), nil
+			return Errorf("No input to send (provide at least one of text/submit/keys/hex/paste)"), nil
 		}
 		if _, err := s.ptmx.Write(payload); err != nil {
-			return Errorf("写入失败: " + err.Error()), nil
+			return Errorf("Write failed: " + err.Error()), nil
 		}
 		wait := a.Wait == nil || *a.Wait
 		if !wait {
@@ -248,16 +248,16 @@ func NewShellSend() CoreTool {
 	})
 }
 
-// NewShellRead 读输出：增量流 或 整屏快照。
+// NewShellRead reads incremental output or a full-screen snapshot.
 func NewShellRead() CoreTool {
-	desc := "读一个交互会话的输出(不发输入)。view=stream(默认)增量原始流(流式首选,续读/可 drain 取全量); view=screen 整屏 vt 快照(适合 vim/htop 等全屏程序)。"
+	desc := "Read output from an interactive session without sending input. view=stream (default) returns incremental raw output; continue reading or use drain for all output. view=screen returns a full VT screen snapshot for programs such as vim/htop."
 	schema := obj(map[string]any{
-		"session_id":   strProp("会话 id"),
-		"view":         strProp("stream(默认) | screen"),
-		"since_cursor": intProp("stream: 从该游标之后读; 不传则用会话内部游标续读"),
-		"max_lines":    intProp("stream: 最多返回行数(默认 200)"),
-		"max_bytes":    intProp("stream: 最多返回字节(默认 8192)"),
-		"drain":        boolProp("stream: true=返回自上次以来全部原始流(忽略上限)"),
+		"session_id":   strProp("Session ID"),
+		"view":         strProp("stream (default) | screen"),
+		"since_cursor": intProp("stream: read after this cursor; omit to continue from the session cursor"),
+		"max_lines":    intProp("stream: maximum lines (default 200)"),
+		"max_bytes":    intProp("stream: maximum bytes (default 8192)"),
+		"drain":        boolProp("stream: true returns all raw output since the previous read, ignoring limits"),
 	}, "session_id")
 	// per-session read cursor kept here (tool-side) so unspecified reads continue.
 	return sessTool("shell_read", desc, schema, true, func(_ context.Context, in json.RawMessage, tc *ToolContext) (Result, error) {
@@ -276,7 +276,7 @@ func NewShellRead() CoreTool {
 		_ = json.Unmarshal(in, &a)
 		s, ok := m.session(a.SessionID)
 		if !ok {
-			return Errorf("会话不存在: " + a.SessionID), nil
+			return Errorf("Session not found: " + a.SessionID), nil
 		}
 		if a.View == "screen" {
 			grid, rows, cols, cx, cy := s.screen()
@@ -306,10 +306,10 @@ func NewShellRead() CoreTool {
 	})
 }
 
-// NewShellClose 关闭会话。
+// NewShellClose closes a session.
 func NewShellClose() CoreTool {
-	schema := obj(map[string]any{"session_id": strProp("会话 id")}, "session_id")
-	return sessTool("shell_close", "关闭一个交互会话(杀掉进程、释放 PTY)。", schema, false, func(_ context.Context, in json.RawMessage, tc *ToolContext) (Result, error) {
+	schema := obj(map[string]any{"session_id": strProp("Session ID")}, "session_id")
+	return sessTool("shell_close", "Close an interactive session, terminate the process and release its PTY.", schema, false, func(_ context.Context, in json.RawMessage, tc *ToolContext) (Result, error) {
 		m, errR := sessManager(tc)
 		if errR != nil {
 			return *errR, nil
@@ -320,7 +320,7 @@ func NewShellClose() CoreTool {
 		_ = json.Unmarshal(in, &a)
 		s, ok := m.session(a.SessionID)
 		if !ok {
-			return Errorf("会话不存在: " + a.SessionID), nil
+			return Errorf("Session not found: " + a.SessionID), nil
 		}
 		ec := s.exit()
 		s.kill()
@@ -331,9 +331,9 @@ func NewShellClose() CoreTool {
 	})
 }
 
-// NewShellList 列出会话。
+// NewShellList lists sessions.
 func NewShellList() CoreTool {
-	return sessTool("shell_list", "列出当前所有交互会话及状态。", obj(map[string]any{}), true, func(_ context.Context, _ json.RawMessage, tc *ToolContext) (Result, error) {
+	return sessTool("shell_list", "List all current interactive sessions and their status.", obj(map[string]any{}), true, func(_ context.Context, _ json.RawMessage, tc *ToolContext) (Result, error) {
 		m, errR := sessManager(tc)
 		if errR != nil {
 			return *errR, nil

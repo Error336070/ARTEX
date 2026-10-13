@@ -113,7 +113,11 @@ func TestInterceptDetails(t *testing.T) {
 		}
 	})
 	t.Run("archive compatibility", func(t *testing.T) {
-		for _, legacy := range []bool{true, false} {
+		for _, variant := range []struct {
+			prefix string
+			legacy bool
+		}{{"[模型]", true}, {"[Model]", true}, {"[模型]", false}, {"[Model]", false}} {
+			legacy := variant.legacy
 			id := create(t, &InterceptAudit{InitialAction: "ask", ExecutionStatus: "not_started"})
 			var raw []byte
 			if err := d.QueryRow(`SELECT row_to_json(ip) FROM intercept_pending ip WHERE id=$1`, id).Scan(&raw); err != nil {
@@ -123,6 +127,7 @@ func TestInterceptDetails(t *testing.T) {
 			if err := json.Unmarshal(raw, &row); err != nil {
 				t.Fatal(err)
 			}
+			row["reason"] = variant.prefix + " fixture"
 			if legacy {
 				delete(row, "audit")
 				delete(row, "decision_source")

@@ -1,4 +1,8 @@
 .git
+.env
+config.json
+jwt.key
+.setup-token
 **/node_modules
 web/.next
 web/out

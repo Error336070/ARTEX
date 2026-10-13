@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activeMention, mentionSearch, mentionToken, selectedMentions } from "./chat-mentions.ts";
+import { activeMention, mentionKinds, mentionSearch, mentionToken, selectedMentions } from "./chat-mentions.ts";
 
 test("mention trigger supports Chinese and cursor placement without hijacking email", () => {
   assert.equal(activeMention("user@example.com", 16), null);
@@ -25,7 +25,17 @@ test("tokens roundtrip labels and removing one reference preserves its neighbors
   const value = `分析 ${first} 和 ${second}`;
   const selected = selectedMentions(value);
   assert.equal(selected.length, 2);
-  assert.equal(selected[0].label, "漏洞 #12 · 标题（1） 描述");
+  assert.equal(selected[0].label, "Finding #12 · 标题（1） 描述");
   const next = value.slice(0, selected[0].start) + value.slice(selected[0].start + selected[0].token.length);
   assert.equal(selectedMentions(next)[0].token, second);
+});
+
+test("English display names preserve every legacy mention wire token", () => {
+  for (const kind of mentionKinds) {
+    const token = mentionToken({ kind: kind.kind, id: 42, label: "Record" });
+    assert.equal(token, `@[${kind.label}#42 Record]`);
+    assert.equal(selectedMentions(token)[0].label, `${kind.displayLabel} #42 · Record`);
+    assert.equal(mentionSearch(`${kind.displayLabel} Record`).kind, kind.kind);
+    assert.equal(mentionSearch(`${kind.displayLabel} Record`).query, "Record");
+  }
 });

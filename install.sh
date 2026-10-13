@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ARTEX 安装脚本：① 全部 Docker  ② 本地编译运行
+# ARTEX installer: 1. All Docker  2. Build and run locally
 set -euo pipefail
 cd "$(cd "$(dirname "$0")" && pwd)"
 
@@ -9,72 +9,86 @@ warn(){ printf '\033[33m[!]\033[0m %s\n' "$*"; }
 die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 ask(){  local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
 rand(){ head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+setup_token(){ head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
-# ── docker 环境检测 / 自动安装 ───────────────────
+# ── Docker detection / automatic installation ───────────────────
 ensure_docker(){
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    ok "已检测到 docker 与 docker compose"; return
+    ok "docker and docker compose found"; return
   fi
-  warn "未检测到 docker / docker compose"
+  warn "docker / docker compose not found"
   case "$(uname -s)" in
     Linux)
-      if [ "$(ask '自动安装 Docker? (y/n)' y)" = y ]; then
+      if [ "$(ask 'Install Docker automatically? (y/n)' y)" = y ]; then
         curl -fsSL https://get.docker.com | sh
         sudo usermod -aG docker "$USER" || true
-        ok "Docker 安装完成（用户组变更需重新登录后免 sudo）"
+        ok "Docker installed (log in again for group changes to allow use without sudo)"
       else
-        die "请自行安装 docker 后重试"
+        die "Install docker manually and retry"
       fi ;;
-    Darwin) die "macOS 请安装 Docker Desktop：https://www.docker.com/products/docker-desktop/" ;;
-    *)      die "请自行安装 docker 后重试" ;;
+    Darwin) die "On macOS, install Docker Desktop:https://www.docker.com/products/docker-desktop/" ;;
+    *)      die "Install docker manually and retry" ;;
   esac
 }
 
-# ── ① 全部 Docker ───────────────────────────────
+# ── 1. All Docker ───────────────────────────────
 install_docker(){
   ensure_docker
   if [ ! -f .env ]; then
     cp .env.example .env 2>/dev/null || true
     local pw key
-    pw="$(ask 'Postgres 密码（回车随机生成）' "$(rand)")"
-    key="$(ask 'ANTHROPIC_API_KEY（可留空，后续在 UI 配）' '')"
+    pw="$(ask 'Postgres password (Enter generates a random value)' "$(rand)")"
+    key="$(ask 'ANTHROPIC_API_KEY (optional; configure later in the UI)' '')"
     sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${pw}|" .env
     sed -i.bak "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${key}|" .env
     rm -f .env.bak
-    ok "已生成 .env（POSTGRES_PASSWORD 已设置）"
+    ok ".env generated (POSTGRES_PASSWORD set)"
   else
-    info "沿用已存在的 .env"
+    info "Using the existing .env"
   fi
-  info "拉取镜像并启动…"
-  docker compose pull || true
-  docker compose up -d
-  ok "启动完成 → http://localhost:8787"
-  info "查看日志：docker compose logs -f artex"
+  if ! grep -q '^ARTEX_SETUP_TOKEN=' .env; then
+    printf '\nARTEX_SETUP_TOKEN=\n' >> .env
+  fi
+  local token
+  token="$(sed -n 's/^ARTEX_SETUP_TOKEN=//p' .env | tail -n 1)"
+  if [ -z "$token" ]; then
+    token="$(setup_token)"
+    sed -i.bak "s|^ARTEX_SETUP_TOKEN=.*|ARTEX_SETUP_TOKEN=${token}|" .env
+    rm -f .env.bak
+  fi
+  [[ "$token" =~ ^[A-Za-z0-9]{32,}$ ]] || die "ARTEX_SETUP_TOKEN in .env must be at least 32 unquoted letters or digits"
+  chmod 600 .env
+  export ARTEX_SETUP_TOKEN="$token"
+  info "Building the image from current source and starting..."
+  docker compose up --build -d
+  ok "Started → http://localhost:8787"
+  info "Initial setup token: $token (only for first password setup at /setup)"
+  info "View logs:docker compose logs -f artex"
 }
 
-# ── ② 本地编译运行 ──────────────────────────────
+# ── 2. Build and run locally ──────────────────────────────
 install_local(){
-  echo "数据库安装方式："
-  echo "  1) 连接已有 PostgreSQL"
-  echo "  2) 用 Docker 起一个 PostgreSQL（需要 docker）"
-  case "$(ask '选择' 1)" in
+  echo "Database installation mode:"
+  echo "  1) Connect to an existing PostgreSQL instance"
+  echo "  2) Start PostgreSQL in Docker (requires docker)"
+  case "$(ask 'Select' 1)" in
     2)
       ensure_docker
-      local pw; pw="$(ask 'Postgres 密码（回车随机）' "$(rand)")"
+      local pw; pw="$(ask 'Postgres password (Enter for random)' "$(rand)")"
       docker run -d --name artex-pg -p 5432:5432 \
         -e POSTGRES_USER=artex -e POSTGRES_PASSWORD="$pw" -e POSTGRES_DB=artex \
         -v artex-pg:/var/lib/postgresql/data postgres:16-alpine
       DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=artex DB_PASS="$pw" DB_NAME=artex DB_SSL=disable ;;
     *)
-      DB_HOST="$(ask '数据库地址' 127.0.0.1)"
-      DB_PORT="$(ask '端口' 5432)"
-      DB_USER="$(ask '账号' artex)"
-      DB_PASS="$(ask '密码' '')"
-      DB_NAME="$(ask '数据库名' artex)"
+      DB_HOST="$(ask 'Database host' 127.0.0.1)"
+      DB_PORT="$(ask 'Port' 5432)"
+      DB_USER="$(ask 'User' artex)"
+      DB_PASS="$(ask 'Password' '')"
+      DB_NAME="$(ask 'Database name' artex)"
       DB_SSL="$(ask 'sslmode (disable/require)' disable)" ;;
   esac
 
-  # 生成 config.json
+  # Generate config.json
   cat > config.json <<JSON
 {
   "database": {
@@ -87,36 +101,48 @@ install_local(){
   }
 }
 JSON
-  ok "已生成 config.json"
+  ok "config.json generated"
 
-  # go 环境检查
-  command -v go >/dev/null 2>&1 || die "未检测到 Go，请先安装 Go（>=1.26）：https://go.dev/dl/"
+  # Check Go environment
+  command -v go >/dev/null 2>&1 || die "Go not found; install Go (>=1.26) first:https://go.dev/dl/"
   ok "Go: $(go version)"
 
-  # 内嵌前端需要 node 出静态产物
+  # Embedding the frontend requires Node to generate static output
   if command -v npm >/dev/null 2>&1; then
-    info "构建前端静态产物…"
+    info "Building static frontend output..."
     ( cd web && npm ci && npm run build:static )
     rm -rf server/webui/dist && cp -r web/out server/webui/dist
-    info "编译内嵌单二进制…"
+    info "Building a single binary with embedded frontend..."
     CGO_ENABLED=0 go build -tags embedui -trimpath -o artex ./cmd/artex
   else
-    warn "未检测到 npm：将编译**不内嵌前端**的后端（前端需另跑 npm run dev）"
+    warn "npm not found: building the backend **without the embedded frontend** (run npm run dev separately for the frontend)"
     CGO_ENABLED=0 go build -o artex ./cmd/artex
   fi
-  ok "编译完成 → ./artex"
+  ok "Build complete → ./artex"
 
-  info "启动…（Ctrl-C 退出）"
+  if [ -z "${ARTEX_SETUP_TOKEN:-}" ]; then
+    if [ -f .setup-token ]; then
+      ARTEX_SETUP_TOKEN="$(cat .setup-token)"
+    else
+      ARTEX_SETUP_TOKEN="$(setup_token)"
+    fi
+  fi
+  [ "${#ARTEX_SETUP_TOKEN}" -ge 32 ] || die "ARTEX_SETUP_TOKEN requires at least 32 characters"
+  (umask 077; printf '%s\n' "$ARTEX_SETUP_TOKEN" > .setup-token)
+  chmod 600 .setup-token
+  export ARTEX_SETUP_TOKEN
+  info "Initial setup token: $ARTEX_SETUP_TOKEN (only for first password setup at /setup)"
+  info "Starting... (Ctrl-C to exit)"
   ./artex
 }
 
 echo "=============================="
-echo "  ARTEX 安装"
-echo "  1) 全部 Docker 安装"
-echo "  2) 本地运行（go 编译）"
+echo "  ARTEX installation"
+echo "  1) All Docker installation"
+echo "  2) Run locally (Go build)"
 echo "=============================="
-case "$(ask '选择' 1)" in
+case "$(ask 'Select' 1)" in
   1) install_docker ;;
   2) install_local ;;
-  *) die "无效选择" ;;
+  *) die "Invalid selection" ;;
 esac

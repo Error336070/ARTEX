@@ -38,7 +38,7 @@ func drainWithCtx(t *testing.T, ctx context.Context, in QueryInput, deps QueryDe
 func TestSettlementOnToolOverrunsBudget(t *testing.T) {
 	m := &scriptedModel{turns: [][]llm.StreamEvent{
 		toolTurn("s1", "sleep", `{"seconds":3600}`), // hangs far past MaxDuration
-		textTurn("已写回事实并总结"),                          // settlement turn → natural stop
+		textTurn("Facts recorded and summarized"),   // settlement turn → natural stop
 	}}
 	in := QueryInput{
 		Messages:       []llm.Message{llm.UserText("go")},
@@ -46,12 +46,12 @@ func TestSettlementOnToolOverrunsBudget(t *testing.T) {
 		PermissionMode: permission.ModeBypass,
 		WorkingDir:     t.TempDir(),
 		MaxDuration:    100 * time.Millisecond, // budget the run so the sleep overruns it
-		Settlement:     &Settlement{Prompt: "SETTLE_ON_TIMEOUT 请写回事实"},
+		Settlement:     &Settlement{Prompt: "SETTLE_ON_TIMEOUT Please record the facts"},
 	}
 	term := drainWithCtx(t, context.Background(), in, QueryDeps{CallModel: m.call})
 
 	if term.Reason != ReasonTimeout {
-		t.Fatalf("reason=%v, want ReasonTimeout（工具超墙→就地收尾，非 aborted_tools）", term.Reason)
+		t.Fatalf("reason=%v, want ReasonTimeout (tool wall timeout triggers settlement, not aborted_tools)", term.Reason)
 	}
 	found := false
 	for _, msg := range term.Messages {
@@ -62,10 +62,10 @@ func TestSettlementOnToolOverrunsBudget(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("超墙收尾提示未被注入到对话")
+		t.Fatalf("Wall-timeout settlement prompt missing from conversation")
 	}
 	if m.calls != 2 {
-		t.Fatalf("应有 2 次模型调用(主+收尾)，得 %d", m.calls)
+		t.Fatalf("Expected 2 model calls (main and settlement); got %d", m.calls)
 	}
 }
 
@@ -90,16 +90,16 @@ func TestParentCancelStillAbortsNoSettlement(t *testing.T) {
 	term := drainWithCtx(t, ctx, in, QueryDeps{CallModel: m.call})
 
 	if term.Reason != ReasonAbortedTools {
-		t.Fatalf("reason=%v, want ReasonAbortedTools（父 ctx 取消=真中断，不收尾）", term.Reason)
+		t.Fatalf("reason=%v, want ReasonAbortedTools (parent ctx cancellation aborts without settlement)", term.Reason)
 	}
 	for _, msg := range term.Messages {
 		for _, c := range msg.Content {
 			if strings.Contains(c.Text, "SHOULD_NOT_APPEAR") {
-				t.Fatalf("父 ctx 取消时不应进入收尾，却注入了收尾提示")
+				t.Fatalf("Settlement prompt should not be injected after parent ctx cancellation")
 			}
 		}
 	}
 	if m.calls != 1 {
-		t.Fatalf("父取消后不应再调用模型收尾，模型调用数=%d，want 1", m.calls)
+		t.Fatalf("Expected no settlement call after parent cancellation; model calls=%d, want 1", m.calls)
 	}
 }

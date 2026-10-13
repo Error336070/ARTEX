@@ -6,86 +6,86 @@ import (
 	"unicode/utf8"
 )
 
-// 本文件覆盖「按整条打包」这个修复：汇总消息超出渠道长度上限时，必须**按整条**
-// 截断并把没装下的条目数如实报出来，让调用方只标记真正送达的那些。
+// Tests enforce packing complete digest entries within platform limits and reporting omitted
+// counts accurately. Previously full rendering followed by truncation and whole-batch success
+// silently lost findings while history showed success. Callers must mark only entries actually
+// delivered.
 //
-// 之前的做法是渲染完整篇再截断、然后整批标记已送达：消息后半截凭空消失，
-// 而投递历史显示全部成功——漏洞就这么没了，且没有任何地方能发现。
 
 func TestMarkdownBodyPacksWholeItemsWithinByteLimit(t *testing.T) {
-	// 200 条中文汇总，必然远超企微 4096 字节。
+	// 200 Chinese digest entries necessarily exceed WeCom's 4096 bytes.
 	m := batchMsg(200)
 	body, kept := markdownBody(m, weComMarkdownLimit)
 
 	if len(body) > weComMarkdownLimit {
-		t.Fatalf("正文 %d 字节超上限 %d", len(body), weComMarkdownLimit)
+		t.Fatalf("Body of %d bytes exceeds limit %d", len(body), weComMarkdownLimit)
 	}
 	if !utf8.ValidString(body) {
-		t.Fatal("正文不是合法 UTF-8")
+		t.Fatal("Body is not valid UTF-8")
 	}
 	if kept <= 0 || kept >= len(m.Items) {
-		t.Fatalf("应只装下一部分（0 < kept < %d），得到 %d", len(m.Items), kept)
+		t.Fatalf("Expected partial batch (0 < kept < %d); got %d", len(m.Items), kept)
 	}
-	// 头部必须如实说明本条只包含多少条、其余有多少条——否则读者会把头部
-	// 那个数字当成全部。
-	if !strings.Contains(body, "其余") || !strings.Contains(body, "下一条消息继续") {
-		t.Fatalf("头部应说明还有多少条未包含在本条里:\n%s", body[:minInt(400, len(body))])
+	// Headers must state included and remaining counts so readers do not mistake the included count
+	// for the entire batch.
+	if !strings.Contains(body, "remaining") || !strings.Contains(body, "continue in the next message") {
+		t.Fatalf("Header should state remaining item count:\n%s", body[:minInt(400, len(body))])
 	}
-	// 只应包含前 kept 条。
+	// Include only the first kept entries.
 	for i := 0; i < kept; i++ {
 		if !strings.Contains(body, "漏洞"+itoa(i+1)) {
-			t.Fatalf("第 %d 条应在本条消息里:\n%s", i+1, body)
+			t.Fatalf("Item %d should appear in this message:\n%s", i+1, body)
 		}
 	}
 	if strings.Contains(body, "漏洞"+itoa(kept+1)) {
-		t.Fatalf("第 %d 条不该出现（它属于下一批）", kept+1)
+		t.Fatalf("Item %d belongs in the next batch", kept+1)
 	}
 }
 
 func TestMarkdownBodyKeepsEverythingWhenUnderLimit(t *testing.T) {
 	m := batchMsg(3)
-	body, kept := markdownBody(m, 0) // 0 = 不限制
+	body, kept := markdownBody(m, 0) // 0 means unlimited.
 	if kept != len(m.Items) {
-		t.Fatalf("不限制长度时应全部保留，得到 kept=%d", kept)
+		t.Fatalf("Unlimited length should preserve all items; got kept=%d", kept)
 	}
-	if strings.Contains(body, "其余") {
-		t.Fatalf("没有截断时不该出现截断提示:\n%s", body)
+	if strings.Contains(body, "remaining") {
+		t.Fatalf("Truncation notice should be absent without truncation:\n%s", body)
 	}
 }
 
 func TestMarkdownBodyAlwaysKeepsAtLeastOneItem(t *testing.T) {
-	// 预算小到连一条都装不下时，仍要发出一条（由最终截断兜底）。
-	// 否则一条超长漏洞会把整批永久卡在原地：每次领取都装不下、每次都不发。
+	// Even if no entry fits, send one with final truncation. Otherwise an oversized finding
+	// permanently blocks the batch on every claim.
 	m := batchMsg(5)
 	_, kept := markdownBody(m, 50)
 	if kept != 1 {
-		t.Fatalf("至少应保留 1 条，得到 %d", kept)
+		t.Fatalf("Expected at least 1 item; got %d", kept)
 	}
 }
 
 func TestMarkdownBodySingleReturnsOne(t *testing.T) {
 	_, kept := markdownBody(singleMsg(), 4096)
 	if kept != 1 {
-		t.Fatalf("单条消息应报送达 1 条，得到 %d", kept)
+		t.Fatalf("Single message should report 1 delivered item; got %d", kept)
 	}
-	// 空消息没有可送达的条目。
+	// Empty messages have no deliverable entries.
 	if _, k := markdownBody(Message{}, 4096); k != 0 {
-		t.Fatalf("空消息应报 0 条，得到 %d", k)
+		t.Fatalf("Empty message should report 0 items; got %d", k)
 	}
 }
 
 func TestTelegramPackingUsesRuneBudget(t *testing.T) {
 	m := batchMsg(200)
 	text, kept := telegramHTML(m)
-	// Telegram 按**字符数**限长；用字节口径会把中文消息压到三分之一。
+	// Telegram limits characters; byte limits would reduce Chinese messages to a third of the intended length.
 	if n := utf8.RuneCountInString(text); n > telegramTextLimit {
-		t.Fatalf("正文 %d 字符超上限 %d", n, telegramTextLimit)
+		t.Fatalf("Body of %d characters exceeds limit %d", n, telegramTextLimit)
 	}
 	if kept <= 0 || kept >= len(m.Items) {
-		t.Fatalf("应只装下一部分，得到 %d", kept)
+		t.Fatalf("Expected partial batch; got %d", kept)
 	}
-	if !strings.Contains(text, "下一条继续") {
-		t.Fatalf("应说明还有余量未包含:\n%.300s", text)
+	if !strings.Contains(text, "continue in the next message") {
+		t.Fatalf("Remaining items should be stated:\n%.300s", text)
 	}
 }
 
@@ -93,44 +93,44 @@ func TestFeishuPackingReportsKept(t *testing.T) {
 	m := batchMsg(2000)
 	_, kept := feishuCard(m)
 	if kept <= 0 || kept >= len(m.Items) {
-		t.Fatalf("卡片应只装下一部分，得到 %d", kept)
+		t.Fatalf("Expected partial card batch; got %d", kept)
 	}
 }
 
 func TestWebhookAndEmailReportAllItems(t *testing.T) {
-	// 这两个渠道不截断正文，整批都算送达。
+	// These two channels do not truncate bodies and deliver the complete batch.
 	m := batchMsg(7)
 	if n := len(m.Items); n != 7 {
-		t.Fatal("前置条件不成立")
+		t.Fatal("Precondition not met")
 	}
-	// 通过渲染器的返回值间接确认：markdownBody(0) 不限制时全部保留。
+	// Verify indirectly through renderer results: unlimited markdownBody(0) retains everything.
 	if _, k := markdownBody(m, 0); k != len(m.Items) {
-		t.Fatalf("不限制长度时应用全部，得到 %d", k)
+		t.Fatalf("Unlimited length should use all items; got %d", k)
 	}
 }
 
-// TestMarkdownEscapesUntrustedContent 是「不可信内容不得改变消息结构」的回归测试。
-// 标题与摘要来自模型输出（模型读的是被测目标响应），资产名来自被测目标的 URL。
+// TestMarkdownEscapesUntrustedContent ensures untrusted content cannot change message structure.
+// Titles/summaries originate from model responses to target content; asset names come from target URLs.
 func TestMarkdownEscapesUntrustedContent(t *testing.T) {
 	cases := []struct {
 		name  string
 		item  Item
-		must  []string // 结果里必须出现（转义形态）
-		wrong []string // 结果里不得出现（未转义形态）
+		must  []string // Must appear in escaped form.
+		wrong []string // Must not appear unescaped.
 	}{
 		{
-			name: "标题里的换行 + 外链",
+			name: "Newline and external link in title",
 			item: Item{
 				Severity: "high",
 				Name:     "登录口 SQL 注入\n[紧急：点此验证账号](http://attacker.tld)",
 			},
-			// 换行必须被折叠（否则能伪造出新的列表项/引用块）；
-			// 方括号与圆括号必须被转义（否则是可点击的外链）。
+			// Collapse newlines to prevent forged list/quote entries and escape brackets/parentheses to
+			// prevent clickable external links.
 			must:  []string{`\[紧急：点此验证账号\]`, `\(http://attacker.tld\)`},
 			wrong: []string{"\n[紧急", "\n\n[紧急"},
 		},
 		{
-			name: "标题里的图片信标",
+			name: "Image beacon in title",
 			item: Item{
 				Severity: "high",
 				Name:     "漏洞 ![](http://attacker.tld/beacon)",
@@ -139,7 +139,7 @@ func TestMarkdownEscapesUntrustedContent(t *testing.T) {
 			wrong: []string{"![]("},
 		},
 		{
-			name: "资产名里的强调与引用",
+			name: "Emphasis and blockquote in asset name",
 			item: Item{
 				Severity: "high",
 				Name:     "普通标题",
@@ -149,7 +149,7 @@ func TestMarkdownEscapesUntrustedContent(t *testing.T) {
 			wrong: []string{"*注入*"},
 		},
 		{
-			name: "摘要里的反引号与竖线",
+			name: "Backticks and pipe in summary",
 			item: Item{
 				Severity: "high",
 				Name:     "标题",
@@ -162,18 +162,18 @@ func TestMarkdownEscapesUntrustedContent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := Message{Items: []Item{tc.item}}
-			// 单条模式的写Item 是三个 markdown 渠道共用的渲染路径。
+			// Single-mode writeItem is the shared rendering path for three Markdown channels.
 			var b strings.Builder
 			writeItem(&b, tc.item, "", true)
 			got := b.String()
 			for _, want := range tc.must {
 				if !strings.Contains(got, want) {
-					t.Errorf("缺少转义形态 %q:\n%s", want, got)
+					t.Errorf("Escaped form missing %q:\n%s", want, got)
 				}
 			}
 			for _, bad := range tc.wrong {
 				if strings.Contains(got, bad) {
-					t.Errorf("出现了未转义形态 %q（可被用来注入结构或外链）:\n%s", bad, got)
+					t.Errorf("Unescaped form %q permits structure or link injection:\n%s", bad, got)
 				}
 			}
 			_ = m
@@ -181,22 +181,22 @@ func TestMarkdownEscapesUntrustedContent(t *testing.T) {
 	}
 }
 
-// TestMarkdownEscapeBackslashFirst 锁住转义顺序：反斜杠必须最先处理，
-// 否则会给后面补上的反斜杠再套一层，输出里出现双反斜杠。
+// TestMarkdownEscapeBackslashFirst fixes escaping order: process backslashes first so newly
+// inserted escapes are not doubled.
 func TestMarkdownEscapeBackslashFirst(t *testing.T) {
 	if got := markdownEscape(`a\b*c`); got != `a\\b\*c` {
-		t.Fatalf("转义顺序有误，得到 %q", got)
+		t.Fatalf("Incorrect escaping order; got %q", got)
 	}
 }
 
-// TestTelegramTitleHasNoMarkdownEscapes 锁住一个具体的回归：
-// markdown 转义不能泄漏到 Telegram 的 HTML 输出里（曾经在共享的标题函数里
-// 加过转义，结果 Telegram 消息里出现 `\(1\)` 这种可见反斜杠）。
+// TestTelegramTitleHasNoMarkdownEscapes prevents Markdown escapes leaking into Telegram HTML.
+// Shared title escaping once displayed visible backslashes such as `\(1\)`.
+//
 func TestTelegramTitleHasNoMarkdownEscapes(t *testing.T) {
 	m := Message{Items: []Item{{Severity: "high", Name: "alert(1) *重点*"}}}
 	text, _ := telegramHTML(m)
 	if strings.Contains(text, `\(`) || strings.Contains(text, `\*`) {
-		t.Fatalf("Telegram 正文里出现了 markdown 的反斜杠转义:\n%s", text)
+		t.Fatalf("Telegram body contains markdown backslash escaping:\n%s", text)
 	}
 }
 

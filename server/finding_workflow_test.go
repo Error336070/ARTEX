@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/traffic"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -93,7 +94,7 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	ts.SetNotifyFinding(func(int64, string) { notices++ })
 	tools, def, cleanup := agent.AugmentTools(ctx, "planner", ts.PlannerTools())
 	defer cleanup()
-	if !strings.Contains(def.FindingGuidance, "evidence_hint_id") || !strings.Contains(def.FindingGuidance, "取消 Worker") {
+	if !strings.Contains(def.FindingGuidance, "evidence_hint_id") || !strings.Contains(def.FindingGuidance, "cancel Workers") {
 		t.Fatal("Planner missed runtime guidance")
 	}
 	report := workflowTool(t, tools, "report_finding")
@@ -131,7 +132,7 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	}
 	workflowCall(t, ctx, s.toolGetFindingTraffic(), map[string]any{"finding_id": recorded.FindingID}, false)
 	wrong := workflowCall(t, ctx, s.toolGetFindingTraffic(), map[string]any{"finding_id": int64(900000000000000000)}, true)
-	if !strings.Contains(wrong, "独立漏洞记录 ID") {
+	if !strings.Contains(wrong, "separate finding record ID") {
 		t.Fatal("ambiguous ID error", wrong)
 	}
 	input["finding_id"] = recorded.FindingID
@@ -175,7 +176,7 @@ func TestFindingWorkflowAutoHintToPlannerAndSetting(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.SplitN(offResult, "\n", 2)[1]), &offRecord); err != nil {
 		t.Fatal(err)
 	}
-	if offRecord.FindingID <= 0 || len(offRecord.Traffic.Bindings) != 0 || offRecord.EvidenceStatus != "not_bound" || !strings.Contains(offRecord.EvidenceNote, "已关闭") {
+	if offRecord.FindingID <= 0 || len(offRecord.Traffic.Bindings) != 0 || offRecord.EvidenceStatus != "not_bound" || !strings.Contains(offRecord.EvidenceNote, "disabled") {
 		t.Fatal("disabled binding discarded finding or bound evidence", offResult)
 	}
 	workflowCall(t, ctx, report, map[string]any{"vulnclass": "TCP", "severity": "low", "summary": "no packet needed"}, false)
@@ -246,7 +247,7 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	}
 	search, _ := pg.GetTool("traffic_search")
 	get, _ := pg.GetTool("traffic_get")
-	if !strings.Contains(search.Description, "支持裸主机、主机:端口或完整 URL") {
+	if !strings.Contains(search.Description, "accepts a hostname, host:port, or full URL") {
 		t.Fatal("traffic_search description migration missing host/port guidance")
 	}
 	if search.Enabled || !contains(search.Agents, "reporter") || get.Enabled || len(get.Agents) != 1 || get.Agents[0] != "custom-agent" {
@@ -259,6 +260,51 @@ func TestFindingWorkflowMigrationPreservesUserConfiguration(t *testing.T) {
 	search, _ = pg.GetTool("traffic_search")
 	if contains(search.Agents, "reporter") {
 		t.Fatal("one-time migration undid later unbinding")
+	}
+}
+
+func TestFindingWorkflowEnglishDescriptionUpgradePreservesEditedText(t *testing.T) {
+	s, _, _ := trafficEvidenceServer(t)
+	pg := s.m.pg
+	search, err := pg.GetTool("traffic_search")
+	if err != nil || search == nil {
+		t.Fatalf("get traffic_search: %v", err)
+	}
+	bindings, _ := json.Marshal(search.Agents)
+	t.Cleanup(func() {
+		_ = pg.UpdateTool("traffic_search", search.Description, search.Schema, bindings, search.Enabled)
+	})
+	const flag = "finding_workflow_tools_v4_english_host_search_description"
+	priorFlag, hadFlag, err := pg.GetSetting(flag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadFlag {
+			_ = pg.SetSetting(flag, priorFlag)
+		} else {
+			_, _ = pg.Exec(`DELETE FROM settings WHERE key=$1`, flag)
+		}
+	})
+	for _, tc := range []struct {
+		name, before, want string
+	}{
+		{"shipped default", trafficSearchDescriptionPreviousDefault, traffic.TrafficSearchDescription},
+		{"edited description", "USER DESCRIPTION", "USER DESCRIPTION"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := pg.UpdateTool("traffic_search", tc.before, search.Schema, bindings, search.Enabled); err != nil {
+				t.Fatal(err)
+			}
+			if err := pg.SetSetting(flag, "false"); err != nil {
+				t.Fatal(err)
+			}
+			s.seedFindingWorkflowTools()
+			got, err := pg.GetTool("traffic_search")
+			if err != nil || got == nil || got.Description != tc.want {
+				t.Fatalf("traffic_search description=%v, want %q (err=%v)", got, tc.want, err)
+			}
+		})
 	}
 }
 
@@ -277,7 +323,7 @@ func TestFindingWorkflowReporterBindsBeforeWritingReport(t *testing.T) {
 	seedServerEvidenceFlow(t, s, "reporter-baseline", []byte("local normal response"))
 	tools, def, cleanup := agent.AugmentTools(ctx, "reporter", nil)
 	defer cleanup()
-	if !strings.Contains(def.FindingGuidance, "报告前自动关联流量") || !strings.Contains(def.FindingGuidance, "绑定成功后重新调用") {
+	if !strings.Contains(def.FindingGuidance, "Automatic traffic association before reporting (enabled)") || !strings.Contains(def.FindingGuidance, "After successful binding") {
 		t.Fatal("reporter did not receive binding workflow")
 	}
 	for _, name := range []string{"traffic_search", "traffic_get", "get_task_worker_trace", "get_task_node_detail", "bind_finding_traffic", "get_finding_traffic", "update_finding_report"} {

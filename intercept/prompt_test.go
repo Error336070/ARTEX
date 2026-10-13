@@ -19,6 +19,15 @@ func TestParseVerdict(t *testing.T) {
 	}
 }
 
+func TestParseVerdictAcceptsEnglishExplanationWithProtocolLabels(t *testing.T) {
+	reason := "实际操作：Read report.md；成功后的后果：Return the existing report without changing files；命中规则：A5"
+	raw, _ := json.Marshal(map[string]string{"decision": "allow", "comment": reason})
+	got := ParseVerdict(string(raw))
+	if got.Action != "allow" || got.Reason != reason {
+		t.Fatalf("lost English explanation or protocol labels: %+v", got)
+	}
+}
+
 func TestParseVerdictRejectsIncompleteOrAmbiguousReplies(t *testing.T) {
 	valid := `{"decision":"allow","comment":"实际操作：读取文件；成功后的后果：返回内容；命中规则：A5"}`
 	for _, reply := range []string{

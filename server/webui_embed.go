@@ -31,10 +31,8 @@ func (s *Server) webuiHandler() http.Handler {
 		if p == "" {
 			p = "index.html"
 		}
-		// 1) exact file (assets: _next/*, favicon.ico, ...)
-		// 2) route dir → <p>/index.html (trailingSlash export)
-		// 3) <p>.html
-		// 4) SPA 兜底 → index.html（交给客户端路由）
+		// 1) Exact assets (_next/*, favicon.ico, etc.); 2) route directory <p>/index.html for trailingSlash export; 3)
+		// <p>.html; 4) SPA fallback index.html for client routing.
 		for _, cand := range []string{p, p + "/index.html", p + ".html"} {
 			if serveFileIfExists(w, r, root, cand) {
 				return
