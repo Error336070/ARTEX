@@ -2,7 +2,7 @@
 
 # ARTEX
 
-AI autonomous penetration testing system (Go backend + Next.js frontend)
+AI autonomous penetration testing system (Go backend + Next.js frontend) - Translated to English by Error336070
 
 
 🌐 **Online demo (simulated data)**： [https://artex-demo.mhtsec.com](https://artex-demo.mhtsec.com)
